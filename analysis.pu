@@ -1,0 +1,148 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+# load the data
+url = "https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv"
+df = pd.read_csv(url)
+
+print("shape:", df.shape)
+print(df.head())
+print("\nmissing values:")
+print(df.isnull().sum())
+
+# ------- cleaning -------
+
+# age has a lot of missing — fill with median per class+sex combo
+# makes more sense than just global median
+df['Age'] = df.groupby(['Pclass', 'Sex'])['Age'].transform(
+    lambda x: x.fillna(x.median())
+)
+
+# embarked only has 2 missing, just use mode
+df['Embarked'].fillna(df['Embarked'].mode()[0], inplace=True)
+
+# cabin is mostly missing, not worth keeping
+# also dropping stuff we won't use
+df.drop(columns=['Cabin', 'Ticket', 'Name', 'PassengerId'], inplace=True)
+
+# check duplicates
+print("\nduplicates:", df.duplicated().sum())
+df.drop_duplicates(inplace=True)
+
+# outlier handling using IQR
+for col in ['Age', 'Fare']:
+    q1 = df[col].quantile(0.25)
+    q3 = df[col].quantile(0.75)
+    iqr = q3 - q1
+    lo = q1 - 1.5 * iqr
+    hi = q3 + 1.5 * iqr
+    n = df[(df[col] < lo) | (df[col] > hi)].shape[0]
+    print(f"{col} outliers capped: {n}")
+    df[col] = df[col].clip(lo, hi)
+
+# a couple of extra columns that might be useful
+df['family_size'] = df['SibSp'] + df['Parch'] + 1
+df['alone'] = (df['family_size'] == 1).astype(int)
+df['age_group'] = pd.cut(
+    df['Age'],
+    bins=[0, 12, 18, 35, 60, 100],
+    labels=['Child', 'Teen', 'Adult', 'Middle-age', 'Senior']
+)
+
+print("\ncleaned shape:", df.shape)
+
+# ------- plots -------
+
+fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+fig.suptitle('Titanic — EDA Dashboard', fontsize=16, fontweight='bold', y=1.01)
+fig.patch.set_facecolor('#f7f7f7')
+
+# 1. survival count
+ax = axes[0, 0]
+vals = df['Survived'].value_counts()
+ax.bar(['No', 'Yes'], vals.values, color=['#d9534f', '#5cb85c'], width=0.45)
+ax.set_title('Survival Count')
+ax.set_ylabel('Count')
+for i, v in enumerate(vals.values):
+    ax.text(i, v + 3, str(v), ha='center', fontsize=9)
+
+# 2. survival rate by pclass
+ax = axes[0, 1]
+sr = df.groupby('Pclass')['Survived'].mean() * 100
+ax.bar(['1st', '2nd', '3rd'], sr.values, color=['#f0ad4e', '#5bc0de', '#9b59b6'], width=0.45)
+ax.set_title('Survival Rate by Class (%)')
+ax.set_ylim(0, 100)
+
+# 3. survival rate by sex
+ax = axes[0, 2]
+sr2 = df.groupby('Sex')['Survived'].mean() * 100
+ax.bar(sr2.index, sr2.values, color=['#5bc0de', '#e75480'], width=0.35)
+ax.set_title('Survival Rate by Sex (%)')
+ax.set_ylim(0, 100)
+
+# 4. age distribution by survival
+ax = axes[1, 0]
+df[df['Survived'] == 0]['Age'].hist(ax=ax, bins=25, alpha=0.6, color='#d9534f', label='Died')
+df[df['Survived'] == 1]['Age'].hist(ax=ax, bins=25, alpha=0.6, color='#5cb85c', label='Survived')
+ax.set_title('Age Distribution')
+ax.set_xlabel('Age')
+ax.legend()
+
+# 5. fare boxplot by class
+ax = axes[1, 1]
+df.boxplot(column='Fare', by='Pclass', ax=ax, patch_artist=True)
+ax.set_title('Fare by Class')
+ax.set_xlabel('Pclass')
+plt.sca(ax)
+plt.title('Fare by Class')
+
+# 6. survival by age group
+ax = axes[1, 2]
+ag = df.groupby('age_group', observed=True)['Survived'].mean() * 100
+ax.bar(ag.index.astype(str), ag.values, color=sns.color_palette('Set2', len(ag)))
+ax.set_title('Survival Rate by Age Group (%)')
+ax.tick_params(axis='x', rotation=20)
+ax.set_ylim(0, 100)
+
+# 7. family size vs survival
+ax = axes[2, 0]
+fs = df.groupby('family_size')['Survived'].mean() * 100
+ax.plot(fs.index, fs.values, 'o-', color='#e67e22', linewidth=2)
+ax.fill_between(fs.index, fs.values, alpha=0.15, color='#e67e22')
+ax.set_title('Survival Rate by Family Size')
+ax.set_xlabel('Family Size')
+ax.set_ylabel('%')
+
+# 8. embarkation point
+ax = axes[2, 1]
+emb = df.groupby('Embarked')['Survived'].mean() * 100
+ax.bar(emb.index, emb.values, color=sns.color_palette('pastel', 3), width=0.4)
+ax.set_title('Survival Rate by Embarkation (%)')
+ax.set_ylim(0, 100)
+
+# 9. correlation heatmap
+ax = axes[2, 2]
+cols = ['Survived', 'Pclass', 'Age', 'Fare', 'SibSp', 'Parch', 'family_size', 'alone']
+corr = df[cols].corr()
+sns.heatmap(corr, ax=ax, annot=True, fmt='.2f', cmap='RdYlGn',
+            center=0, linewidths=0.4, annot_kws={'size': 7})
+ax.set_title('Correlation Heatmap')
+ax.tick_params(labelsize=7)
+
+plt.tight_layout()
+plt.savefig('titanic_dashboard.png', dpi=150, bbox_inches='tight')
+print("\nsaved → titanic_dashboard.png")
+plt.show()
+
+# quick summary
+print("\n--- key numbers ---")
+print(f"overall survival: {df['Survived'].mean()*100:.1f}%")
+print(f"female survival:  {df[df['Sex']=='female']['Survived'].mean()*100:.1f}%")
+print(f"male survival:    {df[df['Sex']=='male']['Survived'].mean()*100:.1f}%")
+for c in [1, 2, 3]:
+    r = df[df['Pclass'] == c]['Survived'].mean() * 100
+    print(f"class {c} survival:  {r:.1f}%")
